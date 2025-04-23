@@ -20,6 +20,12 @@ test_inputs = test_data["inputs"]
 test_labels = test_data["labels"]
 test_ids = test_data["window_ids"]
 
+# Define indices to keep (complement of unneeded_indices)
+keep_indices = list(range(168, 833))  # Inclusive of [168, 832], which is 665 values
+
+# Crop input along the temporal axis (dim=2)
+test_inputs = test_inputs[:, :, keep_indices, :]  
+
 class PreprocessedECGDataset(Dataset):
     def __init__(self, inputs, labels, win_ids):
         self.inputs = inputs
