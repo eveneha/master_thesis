@@ -48,6 +48,7 @@ target_clk_ns = 10
 
 
 filename= './onnx/tcn_v41.onnx'
+# filename = "/home/eveneiha/finn/workspace/ml/model/pruned_model.onnx"
 
 cleanup(filename, out_file=filename)
 
@@ -142,6 +143,13 @@ model = model.transform(RemoveCNVtoFCFlatten())
 # Convertion to HLS 
 model.save('./onnx/tcn_befor_hw.onnx')
 
+for node in model.graph.node:
+    if node.name == "Gather_0":
+        print(f"🔎 Node: {node.name} - op_type: {node.op_type}", flush=True)
+
+model = model.transform(to_hw.InferLookupLayer())
+
+
 model = model.transform(to_hw.InferVectorVectorActivation())
 model = model.transform(to_hw.InferThresholdingLayer())
 model = model.transform(to_hw.InferConvInpGen())
@@ -227,8 +235,10 @@ for node in model.graph.node:
     print(f"Node {node.name} inputs: {node.input}, outputs: {node.output}")
 
 
+
 parent_model = model.transform(CreateDataflowPartition())
 parent_model.save('./onnx/tcn_after_oart.onnx')
+
 
 # # Mapping to Pynq Z1
 sdp_node = parent_model.get_nodes_by_op_type("StreamingDataflowPartition")[0]

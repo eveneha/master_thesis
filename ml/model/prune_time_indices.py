@@ -8,6 +8,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.base import Transformation
 from qonnx.util.basic import get_by_name
 import onnx.helper as oh # Added for shape inference
+#from indices import calculate_output_length
 
 
 # (Keep the existing helper functions like ensure_masktype_is_dict_temporal, merge_dicts_of_sets_temporal, remove_masked_tensor_samples)
@@ -187,6 +188,7 @@ class RemoveMaskedSamples(Transformation):
                       io_shp = model_current.get_tensor_shape(tensor_name) # Get the tensor shape
 
                       current_shape = io_shp if io_t is None else (io_t.shape if hasattr(io_t, 'shape') else None)
+                      #print(f"Current shape for {tensor_name}: {current_shape}")
 
                       if current_shape is None:
                           warnings.warn(f"Cannot prune tensor {tensor_name} with unknown shape.")
@@ -224,8 +226,14 @@ class RemoveMaskedSamples(Transformation):
                                continue # No valid indices to prune
 
                           temp_shp[2] -= len(valid_indices_in_dim)
+                          
+                          
+                        #   #print(tensor_name)
+                        #   if tensor_name == "Conv_1_out0": 
+                        #         # Special case for Conv_2, set to 1
+                        #         temp_shp[2] = 321
                           new_shp = tuple(temp_shp)
-
+                          print(f"Pruned tensor {tensor_name} from shape {current_shape} to {new_shp}")
                           if new_shp != current_shape:
                               model_current.set_tensor_shape(tensor_name, new_shp)
                               shape_changed_in_this_pass[tensor_name] = new_shp # Record change
@@ -245,6 +253,7 @@ class RemoveMaskedSamples(Transformation):
                               continue # No valid indices to prune
 
                           new_t = remove_masked_tensor_samples(io_t, valid_indices_in_dim, axis=2)
+                          #print(f"Pruned tensor {tensor_name} from shape {io_t.shape} to {new_t.shape}")
 
                           if new_t.shape != io_t.shape:
                              model_current.set_initializer(tensor_name, new_t)
@@ -427,6 +436,123 @@ class RemoveMaskedSamples(Transformation):
         # After the internal shape propagation loop finishes (stabilized or maxed out)
         # The outer transformation runner might still call apply again if need_rerun_outer was set.
         return (model_current, need_rerun_outer)
+
+import numpy as np
+import warnings
+from typing import Dict, List, Tuple, Set
+import math
+from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.transformation.base import Transformation
+from qonnx.util.basic import get_by_name # Keep if needed elsewhere
+import onnx.helper as oh
+from onnx import TensorProto
+
+class InsertConvGatherNodes(Transformation):
+    """
+    Inserts Gather nodes specifically after Conv_1_out0 and Conv_3_out0
+    (or user-specified tensor names) to select relevant temporal indices.
+    Assumes the relevant_indices_map provides the indices to KEEP.
+    Updates graph connections and shapes for the Gather output.
+    """
+    def __init__(self, relevant_indices_map: Dict[str, List[int]],
+                 conv_outputs_to_gather: List[str] = ["Conv_1", "Conv_3"], # Specify targets here
+                 temporal_axis=2) -> None:
+        super().__init__()
+        self.conv_outputs_to_gather = conv_outputs_to_gather
+        # Filter the input map to only include the specified conv outputs
+        self.relevant_indices_map = {}
+        for tensor_name in self.conv_outputs_to_gather:
+             if tensor_name in relevant_indices_map:
+                 try:
+                     indices = relevant_indices_map[tensor_name]
+                     # Ensure indices are sorted list of unique integers
+                     self.relevant_indices_map[tensor_name] = sorted(list(set(int(i) for i in indices)))
+                 except (ValueError, TypeError) as e:
+                      warnings.warn(f"Invalid indices for target tensor {tensor_name}: {e}. Skipping.")
+             else:
+                 warnings.warn(f"Target tensor {tensor_name} not found in provided relevant_indices_map. Skipping.")
+
+        self.temporal_axis = temporal_axis
+        self.gather_inserted_for = set() # Track insertions within this instance
+
+    def apply(self, model: ModelWrapper) -> Tuple[ModelWrapper, bool]:
+        print(f"--- InsertConvGatherNodes: Applying Gather after {self.conv_outputs_to_gather} ---")
+        graph = model.graph
+        graph_changed_this_pass = False
+        nodes_to_add = []
+        initializers_to_add = []
+        rewiring_map = {}
+
+        # Iterate only through the specific tensors we want to gather from
+        for tensor_name in self.conv_outputs_to_gather:
+            if tensor_name not in self.relevant_indices_map: continue # Skip if no valid indices were found
+            if tensor_name in self.gather_inserted_for: continue # Skip if already done by this instance
+
+            relevant_indices = self.relevant_indices_map[tensor_name]
+            if not relevant_indices: continue # Skip if empty list
+
+            current_shape = model.get_tensor_shape(tensor_name)
+            if current_shape is None or len(current_shape) <= self.temporal_axis or not isinstance(current_shape[self.temporal_axis], int):
+                warnings.warn(f"Cannot insert Gather for {tensor_name}: incompatible shape {current_shape}.")
+                continue
+
+            current_temporal_size = current_shape[self.temporal_axis]
+            # Indices should already be validated ints from __init__
+            valid_relevant_indices = [idx for idx in relevant_indices if 0 <= idx < current_temporal_size]
+
+            if not valid_relevant_indices:
+                 warnings.warn(f"No *valid* relevant indices remain for {tensor_name} (shape {current_shape}). Skipping.")
+                 continue
+
+            if len(valid_relevant_indices) == current_temporal_size:
+                 self.gather_inserted_for.add(tensor_name); continue # No change needed
+
+            # --- Create Gather Node ---
+            print(f"  Inserting Gather for tensor: {tensor_name} (keeping {len(valid_relevant_indices)} indices)")
+            graph_changed_this_pass = True
+
+            indices_tensor_name = model.make_new_valueinfo_name()
+            indices_array = np.array(valid_relevant_indices, dtype=np.int64)
+            indices_tensor = oh.make_tensor( name=indices_tensor_name, data_type=TensorProto.INT64, dims=indices_array.shape, vals=indices_array.tobytes(), raw=True)
+            initializers_to_add.append(indices_tensor)
+
+            gather_node_name = tensor_name + "_gather_node"
+            gather_output_name = model.make_new_valueinfo_name()
+            gather_node = oh.make_node("Gather", inputs=[tensor_name, indices_tensor_name], outputs=[gather_output_name], name=gather_node_name, axis=self.temporal_axis)
+            nodes_to_add.append(gather_node)
+
+            new_temporal_size = len(valid_relevant_indices)
+            new_shape = list(current_shape); new_shape[self.temporal_axis] = new_temporal_size
+            model.set_tensor_shape(gather_output_name, tuple(new_shape))
+
+            rewiring_map[tensor_name] = gather_output_name
+            self.gather_inserted_for.add(tensor_name)
+
+        # --- Perform Rewiring ---
+        if rewiring_map:
+            nodes_to_check = list(graph.node) # Iterate existing nodes
+            for node in nodes_to_check:
+                if node.name in [n.name for n in nodes_to_add]: continue # Skip the new Gather nodes
+                for i, inp_name in enumerate(node.input):
+                    if inp_name in rewiring_map:
+                         node.input[i] = rewiring_map[inp_name]
+            for i, out_tensor in enumerate(graph.output):
+                 if out_tensor.name in rewiring_map:
+                      graph.output[i].name = rewiring_map[out_tensor.name]
+
+        # Add new nodes/initializers
+        graph.node.extend(nodes_to_add)
+        graph.initializer.extend(initializers_to_add)
+
+        if graph_changed_this_pass:
+            model.cleanup()
+
+        print(f"--- InsertConvGatherNodes: Finished. Inserted {len(nodes_to_add)} Gather nodes. ---")
+        return (model, False) # Should finish in one pass
+
+
+
+
 
 
 class PruneSamples(Transformation):
