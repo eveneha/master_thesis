@@ -2,7 +2,7 @@ from shutil import copy, make_archive
 from qonnx.core.modelwrapper import ModelWrapper
 import shutil, os
 
-version = 15
+version = 24
 deploy_dir = f"/home/eveneiha/finn/workspace/fpga/deploy_v{version}"
 
 # Check if folder exists
@@ -39,7 +39,7 @@ print("✅ Driver files copied.")
 # Add test input files to the deploy folder
 input_npy = "/home/eveneiha/finn/workspace/ml/data/input.npy"
 labels_npy = "/home/eveneiha/finn/workspace/ml/data/labels.npy"
-finn_input_npy = "/home/eveneiha/finn/workspace/ml/data/finn_sample_quantized.npy"
+finn_input_npy = "/home/eveneiha/finn/workspace/ml/data/finn_sample.npy"
 
 shutil.copy(input_npy, deploy_dir)
 shutil.copy(labels_npy, deploy_dir)
