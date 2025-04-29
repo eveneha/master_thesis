@@ -1,0 +1,19 @@
+[{
+    "id": 0,
+    "insert_position": "",
+    "functionName": "StreamingSlice_top",
+    "label": "",
+    "functionLabel": "",
+    "success": false,
+    "slx": false,
+    "ifcond": "",
+    "sourceFile": "\/home\/eveneiha\/finn\/finn_host_build_dir\/code_gen_ipgen_StreamingSlice_hls_00pwfmj32\/run_hls.tcl",
+    "sourceLine": 8,
+    "pragma": {
+      "name": "TOP",
+      "option": [{
+          "name": "name",
+          "value": "StreamingSlice_top"
+        }]
+    }
+  }]
