@@ -1,0 +1,24 @@
+#-----------------------------------------------------------
+# Vivado v2024.1 (64-bit)
+# SW Build 5076996 on Wed May 22 18:36:09 MDT 2024
+# IP Build 5075265 on Wed May 22 21:45:21 MDT 2024
+# SharedData Build 5076995 on Wed May 22 18:29:18 MDT 2024
+# Start of session at: Sun Apr 27 14:15:32 2025
+# Process ID: 1107615
+# Current directory: /home/eveneiha/finn/workspace
+# Command line: vivado
+# Log file: /home/eveneiha/finn/workspace/vivado.log
+# Journal file: /home/eveneiha/finn/workspace/vivado.jou
+# Running On        :eveneiha-Yoga-Slim-7-Pro-14ACH5
+# Platform          :Ubuntu
+# Operating System  :Ubuntu 22.04.5 LTS
+# Processor Detail  :AMD Ryzen 5 5600H with Radeon Graphics
+# CPU Frequency     :4242.075 MHz
+# CPU Physical cores:6
+# CPU Logical cores :12
+# Host memory       :14508 MB
+# Swap memory       :8589 MB
+# Total Virtual     :23098 MB
+# Available Virtual :7390 MB
+#-----------------------------------------------------------
+start_gui
