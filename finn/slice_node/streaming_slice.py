@@ -163,8 +163,29 @@ class StreamingSlice(HWCustomOp):
     def get_normal_input_shape(self, ind=0):
         ishape = self.get_nodeattr("input_shape")
         return ishape
+    
+    
     def get_folded_input_shape(self, ind=0):
+        # Calculate based on the normal *input* shape
+        normal_ishape = self.get_normal_input_shape(ind)
+        # Assuming SIMD=1 / PE=1 for the slice itself
+        # (i.e., it processes one stream element at a time)
+        if normal_ishape and len(normal_ishape) > 0:
+            # Append the parallelism dimension (usually 1 for simple streaming ops)
+            # Ensure this format matches what InsertFIFO expects (e.g., NHWC -> NHWCC')
+            if len(normal_ishape) == 4: # NHWC
+                return normal_ishape + [1] # Example folding for SIMD=1
+            else:
+                # Handle other dimensionalities if necessary
+                return normal_ishape # Or raise error if unexpected dim
+        else:
+            warnings.warn(f"Could not determine normal input shape for {self.onnx_node.name}")
+            return [] # Return empty list to indicate failure
+    
+    
+    def get_folded_output_shape(self, ind=0):
         return self.get_nodeattr("folded_shape")
+
 
     def get_input_datatype(self, ind=0):
         return DataType[self.get_nodeattr("dataType")]
@@ -181,11 +202,6 @@ class StreamingSlice(HWCustomOp):
         return self.get_nodeattr("folded_shape")
 
 
-    def get_instream_width(self, ind=0):
-        dtype = DataType[self.get_nodeattr("dataType")]
-        folded_shape = self.get_nodeattr("folded_shape")
-        in_width = folded_shape[-1] * dtype.bitwidth()
-        return in_width
 
 
     def global_includes(self):
@@ -203,6 +219,12 @@ class StreamingSlice(HWCustomOp):
         out_width = folded_shape[-1] * dtype.bitwidth()
         return out_width
 
+
+    def get_instream_width(self, ind=0):
+        dtype = DataType[self.get_nodeattr("dataType")]
+        folded_shape = self.get_nodeattr("folded_shape")
+        in_width = folded_shape[-1] * dtype.bitwidth()
+        return in_width
    
 
     

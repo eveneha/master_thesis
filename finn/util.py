@@ -4,125 +4,15 @@ from finn.custom_op.fpgadataflow.streaming_slice import StreamingSlice
 
 from qonnx.custom_op.registry import getCustomOp
 
-
-# def transpose_and_rewire_between_transposes(model, start_tensor_name, end_tensor_name):
-#     """
-#     Absorb two known Transpose nodes doing NCHW->NHWC.
-#     Modify nodes between by updating slicing axis and tensor shapes.
-#     """
-
-#     # Find Transpose nodes by tensor name
-#     start_transpose = None
-#     end_transpose = None
-#     for node in model.graph.node:
-#         if node.op_type == "Transpose":
-#             if node.output[0] == start_tensor_name:
-#                 start_transpose = node
-#             if node.output[0] == end_tensor_name:
-#                 end_transpose = node
-
-#     if start_transpose is None or end_transpose is None:
-#         raise Exception(f"Could not find transpose nodes with given tensor outputs {start_tensor_name} and {end_tensor_name}.")
-
-#     print(f"🚀 Starting transpose absorption between {start_transpose.output[0]} and {end_transpose.output[0]}")
-
-#     # Fixed permutation
-#     perm = [0,2,3,1]      # NCHW -> NHWC
-#     inverse_perm = [0,3,1,2]  # NHWC -> NCHW
-
-#     # Find all nodes between start and end
-#     start_output = start_transpose.output[0]
-#     end_input = end_transpose.input[0]
-
-#     queue = [start_output]
-#     visited = set()
-#     nodes_between = []
-
-#     while queue:
-#         tensor = queue.pop()
-#         consumers = model.find_consumers(tensor)
-#         for cons in consumers:
-#             if cons.output[0] == end_transpose.output[0]:
-#                 continue
-#             if cons.name in visited:
-#                 continue
-#             visited.add(cons.name)
-#             nodes_between.append(cons)
-#             for out_tensor in cons.output:
-#                 queue.append(out_tensor)
-
-#     print(f"🧩 Nodes between transposes: {[n.op_type for n in nodes_between]}")
-
-#     # Modify nodes between
-#     for node in nodes_between:
-#         if node.op_type == "StreamingSlice":
-#             ss = StreamingSlice(node)
-#             old_axis = ss.get_nodeattr("axis")
-#             new_axis = inverse_perm[old_axis]
-#             print(f"📐 StreamingSlice {node.name}: axis {old_axis} -> {new_axis}")
-#             ss.set_nodeattr("axis", new_axis)
-
-#         elif node.op_type == "MultiThreshold":
-#             print(f"📐 MultiThreshold {node.name}: no change needed.")
-#         elif node.op_type in ["MultiThreshold", "Thresholding"]:
-#             print(f"📐 {node.op_type} {node.name}: updating to new axis")
-#             # Find the axis attribute
-#             for attr in node.attribute:
-#                 if attr.name == "axis":
-#                     print(f"📐 Old axis: {attr.i}")
-#                     attr.i = 3
-#                     print(f"📐 New axis: {attr.i}")
-
-#         else:
-#             print(f"⚠️ Node {node.name} of type {node.op_type} not explicitly handled.")
-
-#     # Update output tensor shapes
-#     for node in nodes_between:
-#         for output_name in node.output:
-#             if model.get_tensor_shape(output_name) is not None:
-#                 old_shape = model.get_tensor_shape(output_name)
-#                 if len(old_shape) == 4:
-#                     new_shape = [old_shape[i] for i in perm]
-#                     model.set_tensor_shape(output_name, new_shape)
-#                     print(f"📐 Output {output_name} shape updated: {old_shape} -> {new_shape}")
-#                 else:
-#                     print(f"📐 Skipping non-4D output {output_name} with shape {old_shape}")
-
-#     # Also update intermediate value_info shapes
-#     for vi in model.graph.value_info:
-#         if vi.name in visited:
-#             old_shape = [d.dim_value for d in vi.type.tensor_type.shape.dim]
-#             if len(old_shape) == 4:
-#                 new_shape = [old_shape[i] for i in perm]
-#                 for idx, val in enumerate(new_shape):
-#                     vi.type.tensor_type.shape.dim[idx].dim_value = val
-#                 print(f"📐 ValueInfo {vi.name} shape updated: {old_shape} -> {new_shape}")
-#             else:
-#                 print(f"📐 Skipping non-4D ValueInfo {vi.name} with shape {old_shape}")
-
-#     # Remove the Transpose nodes
-#     model.graph.node.remove(start_transpose)
-#     model.graph.node.remove(end_transpose)
-
-#     # Reconnect graph
-#     for node in model.find_consumers(start_transpose.output[0]):
-#         for idx, inp in enumerate(node.input):
-#             if inp == start_transpose.output[0]:
-#                 node.input[idx] = start_transpose.input[0]
-
-#     for node in model.graph.node:
-#         for idx, inp in enumerate(node.input):
-#             if inp == end_transpose.output[0]:
-#                 node.input[idx] = end_transpose.input[0]
-
-#     print(f"✅ Transpose absorption complete.")
-
-#     return model
-
-import onnx
+# Import necessary QONNX/ONNX components
+from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.core.onnx_exec import execute_onnx # Optional, for getting constants
+from qonnx.transformation.general import GiveUniqueNodeNames # Good practice
 import numpy as np
 
-def convert_node_output_to_nhwc(model, node_name):
+
+
+def convert_node_io_to_nhwc(model, node_name):
     """
     Given a node name, permute its output tensor(s) from NCHW to NHWC format.
     Only changes tensor shapes, and updates fpgadataflow attributes if needed.
@@ -143,6 +33,10 @@ def convert_node_output_to_nhwc(model, node_name):
     perm = [0,2,3,1]  # NCHW -> NHWC
     new_normal_shape = None
 
+    
+    
+
+
     # Update output tensor shapes (normal shapes)
     for output_name in target_node.output:
         if model.get_tensor_shape(output_name) is not None:
@@ -153,6 +47,18 @@ def convert_node_output_to_nhwc(model, node_name):
                 print(f"📐 Updated output {output_name} normal shape from {old_shape} to {new_normal_shape}")
             else:
                 print(f"📐 Skipping non-4D output {output_name} with shape {old_shape}")
+                
+    for input_name in target_node.input:
+        if model.get_tensor_shape(input_name) is not None:
+            input_shape = model.get_tensor_shape(input_name)
+            if len(input_shape) == 4:
+                new_input_shape = input_shape
+                print(f"📐 Updateed input_shape attr of {target_node.name} input shape from {input_shape} to {new_input_shape}")
+            else:
+                print(f"📐 Skipping non-4D output {output_name} with shape {old_shape}")
+
+
+
 
     # Only for fpgadataflow nodes
     if target_node.domain == "finn.custom_op.fpgadataflow" and new_normal_shape is not None:
@@ -161,6 +67,7 @@ def convert_node_output_to_nhwc(model, node_name):
         # Update normal_shape and output_shape
         inst.set_nodeattr("normal_shape", new_normal_shape)
         inst.set_nodeattr("output_shape", new_normal_shape)
+        inst.set_nodeattr("input_shape", new_input_shape)
 
         # Recompute folded_shape based on new normal_shape
         folded_shape = inst.get_nodeattr("folded_shape")
@@ -223,6 +130,7 @@ def fix_streamingdwchapes(model):
                         print(f"📐 Fixed input {in_name} shape: {old_shape} -> {new_shape}")
 
     return model
+
 
 
 

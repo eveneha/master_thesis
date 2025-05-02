@@ -60,7 +60,8 @@ model = model.transform(ConvertQONNXtoFINN())
 model = model.transform(InferShapes())                              
 model = model.transform(FoldConstants())                             
 model = model.transform(GiveUniqueNodeNames())                                                                    
-model = model.transform(GiveReadableTensorNames())                                                                                                                          
+model = model.transform(GiveReadableTensorNames()) 
+model.save('./onnx/tcn_after_convert.onnx')                                                                                                                         
 model = model.transform(RemoveStaticGraphInputs())                 
 model = model.transform(GiveUniqueParameterTensors())                                                                    
 model = model.transform(SortGraph())                                                                                                                                  
@@ -68,7 +69,8 @@ model = model.transform(ConvertSubToAdd())
 model = model.transform(ConvertDivToMul())                        
 model = model.transform(RemoveUnusedTensors())                                                                                 
 model = model.transform(MovePadAttributeToTensor())  
-
+# import sys 
+# sys.exit()
 
 print("🧪 Thresholds Before streamline:")
 for init in model.graph.initializer:
@@ -78,6 +80,9 @@ for init in model.graph.initializer:
 
 model = model.transform(absorb.AbsorbAddIntoMultiThreshold())
 model = model.transform(absorb.AbsorbMulIntoMultiThreshold())
+
+model.save('./onnx/tcn_after_abs.onnx')
+
 model = model.transform(Streamline()) # Apply a series of transformations to the model to make it more efficient.
 
 print("🧪 Thresholds after streamline:")
@@ -86,8 +91,10 @@ for init in model.graph.initializer:
         th = model.get_initializer(init.name)
         print(f"- {init.name}: min={th.min()}, max={th.max()}")
         
-model.save('./onnx/tcn_before_globalavg.onnx')  
-model = model.transform(InferDataLayouts())
+model.save('./onnx/tcn_before_globalavg.onnx') 
+
+
+model = model.transform(InferDataLayouts()) 
 model = model.transform(RemoveIdentityOps())
 model = model.transform(to_hw.InferGlobalAccPoolLayer())
 model = model.transform(InferShapes())
@@ -103,6 +110,7 @@ model = model.transform(InferDataLayouts())
 model = model.transform(absorb.AbsorbAddIntoMultiThreshold())
 model = model.transform(absorb.AbsorbMulIntoMultiThreshold())
 model = model.transform(absorb.AbsorbSignBiasIntoMultiThreshold())
+model.save('./onnx/tcn_beforeconsecutivetransposes.onnx')
 model = model.transform(absorb.AbsorbConsecutiveTransposes())
 
 model.save('./onnx/tcn_after_abs.onnx')
@@ -180,10 +188,14 @@ model = ModelWrapper(dataflow_model_filename)
 
 
 
+
+
 # --- Hardware Build ---
 
 model = model.transform(SpecializeLayers(fpga_part))
 model.save('./onnx/tcn_after_specialize.onnx')
+import sys 
+# sys.exit("Terminating early for debugging purposes") 
 
 
 model = model.transform(InsertAndSetFIFODepths(fpgapart=fpga_part))

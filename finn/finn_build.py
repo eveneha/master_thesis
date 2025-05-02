@@ -1,6 +1,6 @@
 
 import os
-
+import sys 
 # FINN
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
 import finn.transformation.fpgadataflow.convert_to_hw_layers as to_hw
@@ -24,7 +24,7 @@ from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 
 from slice_node.replace_slice_with_streaming_slice import ReplaceSliceWithStreamingSlice
 
-from util import convert_node_output_to_nhwc, remove_node_and_rewire, update_node_attribute, fix_streamingdwchapes
+from util import convert_node_io_to_nhwc, remove_node_and_rewire, update_node_attribute, fix_streamingdwchapes
 
 # QONNX
 from qonnx.util.cleanup import cleanup
@@ -56,22 +56,20 @@ filename= './onnx/tcn_v41_inf.onnx'
 cleanup(filename, out_file=filename)
 
 model = ModelWrapper(filename)
+model.save('./onnx/000_after_cleanup.onnx')
 model = model.transform(ConvertQONNXtoFINN())
+model.save('./onnx/000_after_convertQONNXtoFINN.onnx')
 #model.set_tensor_datatype("global_in", DataType["INT8"])
-model = model.transform(GiveUniqueNodeNames())                                                                    
-model = model.transform(GiveReadableTensorNames())  
-model.save('./onnx/00tcn_before_qonnx_transforms.onnx')
 
-
-
-
-
+#model = model.transform(GiveUniqueNodeNames())                                                                    
+#model = model.transform(GiveReadableTensorNames())  
 
 # Transforming onnx to be cleaner
 model = model.transform(InferShapes())                              
 model = model.transform(FoldConstants())                             
 model = model.transform(GiveUniqueNodeNames())                                                                    
-model = model.transform(GiveReadableTensorNames())                                                                                                                          
+model = model.transform(GiveReadableTensorNames())  
+model.save('./onnx/00tcn_before_qonnx_transforms.onnx')                                                                                                                        
 model = model.transform(RemoveStaticGraphInputs())                 
 model = model.transform(GiveUniqueParameterTensors())                                                                    
 model = model.transform(SortGraph())                                                                                                                                  
@@ -80,7 +78,8 @@ model = model.transform(ConvertDivToMul())
 model = model.transform(RemoveUnusedTensors())                                                                                 
 model = model.transform(MovePadAttributeToTensor())  
 
-model.save('./onnx/00a_tcn_after_qonnx_transforms.onnx')
+model.save('./onnx/00a_tcn_after_qonnx_transforms.onnx') # <--- FIRST VERSION THAT WORKS ON ONNXRUNTIME 
+#model = model.transform(Streamline()) # Apply a series of transformations to the model to make it more efficient.
 
 print("🧪 Thresholds Before streamline:")
 for init in model.graph.initializer:
@@ -88,10 +87,12 @@ for init in model.graph.initializer:
         th = model.get_initializer(init.name)
         print(f"- {init.name}: min={th.min()}, max={th.max()}")
 
+## must move final add above  MultiThreshold_10
+
 model = model.transform(absorb.AbsorbAddIntoMultiThreshold())
+
 model = model.transform(absorb.AbsorbMulIntoMultiThreshold())
 model.save('./onnx/00b_where_did_bn_go.onnx')
-
 
 
 model = model.transform(Streamline()) # Apply a series of transformations to the model to make it more efficient.
@@ -99,7 +100,10 @@ model = model.transform(Streamline()) # Apply a series of transformations to the
 model = model.transform(ReplaceSliceWithStreamingSlice()) ## <-- This is the custom op
 model.save('./onnx/00a_tcn_after_streaming_slice.onnx')
 model = model.transform(absorb.AbsorbMulIntoMultiThreshold())
+
 model.save('./onnx/00b_after_streaming_slice.onnx')
+
+
 
 print("🧪 Thresholds after streamline:")
 for init in model.graph.initializer:
@@ -177,16 +181,28 @@ model = model.transform(GiveUniqueNodeNames())
 model = model.transform(GiveReadableTensorNames())
 model = model.transform(absorb.AbsorbConsecutiveTransposes())
 
-model.save('./onnx/05a_tcn_after_hls.onnx')
+model.save('./onnx/99a_tcn_after_hls.onnx')
 
-
-model = convert_node_output_to_nhwc(model, "StreamingSlice_0")
-model.save('./onnx/06tcn_after_hls.onnx')
 model = remove_node_and_rewire(model, "Transpose_1")
+model = convert_node_io_to_nhwc(model, "StreamingSlice_0")
+
+model.save('./onnx/99tcn_after_hls.onnx')
+
+
 model.save('./onnx/06a_after_transpose_remove.onnx')
+model = update_node_attribute(model, "StreamingSlice_0", "axis", 1)
+model.save('./onnx/06a_after_axis_change.onnx')
+
 model = update_node_attribute(model, "Thresholding_4", "NumChannels", 8)
 model = update_node_attribute(model, "Thresholding_4", "numInputVectors", [1,17,1])
+model.save('./onnx/06b_after_numInputVectors_change.onnx')
 
+# removing reduntand input parameters on streamingslice
+model = model.transform(InferShapes())
+model = model.transform(RemoveUnusedTensors())
+
+model.save('./onnx/06c_after_remove_unused_tensors.onnx')
+#sys.exit("Terminating early with message") 
 
 
 # print("\n✅ Shape sanity check after ReplaceSliceWithStreamingSlice:")
@@ -260,15 +276,15 @@ model = ModelWrapper(dataflow_model_filename)
 model = model.transform(SpecializeLayers(fpga_part))
 model.save('./onnx/09tcn_after_specialize.onnx')
 
-model = fix_streamingdwchapes(model)
+#model = fix_streamingdwchapes(model)
 
-for node in model.graph.node:
-    if node.op_type == "StreamingSlice_hls":
-        inst = getCustomOp(node)
-        print("Node:", node.name)
-        print("ip_path:", inst.get_nodeattr("ip_path"))
-        print("impl_style:", inst.get_nodeattr("impl_style"))
-        print("backend:", inst.get_nodeattr("backend"))
+# for node in model.graph.node:
+#     if node.op_type == "StreamingSlice_hls":
+#         inst = getCustomOp(node)
+#         print("Node:", node.name)
+#         print("ip_path:", inst.get_nodeattr("ip_path"))
+#         print("impl_style:", inst.get_nodeattr("impl_style"))
+#         print("backend:", inst.get_nodeattr("backend"))
 
 
 model = model.transform(InsertAndSetFIFODepths(fpgapart=fpga_part))
