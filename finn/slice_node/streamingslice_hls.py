@@ -3,6 +3,7 @@ from finn.custom_op.fpgadataflow.streaming_slice import StreamingSlice
 from finn.util.basic import make_build_dir
 import os
 
+
 class StreamingSlice_hls(StreamingSlice):
 	"""HLS implementation for StreamingSlice. Inherits directly since no special HLS behavior is needed."""
 	def ipgen_singlenode_code(self, build_dir):
@@ -16,20 +17,60 @@ class StreamingSlice_hls(StreamingSlice):
 		axis = self.get_nodeattr("axis")
 		input_shape = self.get_nodeattr("input_shape")
 		input_len = input_shape[axis]
+		module_name = self.get_nodeattr("module_name")
 
+	# 	cpp_code = f"""#include "streaming_slice.hpp"
+
+	# extern "C" {{
+	# void {module_name}(hls::stream<ap_int<20>> &in0,
+	# 						hls::stream<ap_int<20>> &out) {{
+
+	# 		#pragma HLS INTERFACE axis register_mode=both port=in0 name=in0
+	# 		#pragma HLS INTERFACE axis register_mode=both port=out name=out_r
+	# 		#pragma HLS INTERFACE ap_ctrl_none port=return
+			
+
+
+	# 	StreamingSlice<ap_int<20>, {input_len}, {slice_length}, {start_idx}, {step}>(in0, out);
+	# }}
+	# }}
+	# """
+		inp_finn_dtype = self.get_input_datatype(0)
+		out_finn_dtype = self.get_output_datatype(0)
+		# For StreamingSlice, input and output types must match
+		assert inp_finn_dtype == out_finn_dtype, f"StreamingSlice {node_name}: Input and output DataTypes must be the same."
+		print(inp_finn_dtype)
+		dtype_hls_str = inp_finn_dtype.get_hls_datatype_str() 
+		 # --- Generate C++ Code ---
 		cpp_code = f"""#include "streaming_slice.hpp"
+	#include "ap_int.h"      // Ensure ap_int types are known by HLS compiler
+	#include "hls_stream.h"  // Ensure hls::stream is known by HLS compiler
 
+	// Wrapper function callable by HLS
 	extern "C" {{
-	void StreamingSlice_top(hls::stream<ap_int<24>> &in0,
-							hls::stream<ap_int<24>> &out) {{
-		#pragma HLS interface axis port=in0
-		#pragma HLS interface axis port=out
-		#pragma HLS interface ap_ctrl_none port=return
+	void {module_name}(
+		hls::stream<{dtype_hls_str}> &in0,      // Input stream parameter
+		hls::stream<{dtype_hls_str}> &out       // Output stream parameter
+		) {{
 
-		StreamingSlice<ap_int<24>, {input_len}, {slice_length}, {start_idx}, {step}>(in0, out);
+	// Interface Pragmas: Define hardware interfaces for ports
+	#pragma HLS INTERFACE axis register_mode=both port=in0 name=in0
+	#pragma HLS INTERFACE axis register_mode=both port=out name=out_r
+	#pragma HLS INTERFACE ap_ctrl_none port=return
+
+		// Instantiation of the core slicing logic from the header file
+		// Uses the dynamically determined data type and parameters
+		StreamingSlice<
+			{dtype_hls_str},    // Data type (e.g., ap_int<8>)
+			{input_len},        // NumIn: Total elements expected on input stream along axis
+			{slice_length},     // NumOut: Total elements to produce on output stream
+			{start_idx},        // StartIdx: Starting index for slicing
+			{step}              // Step: Step size for slicing
+		>(in0, out);            // Pass the input and output streams
 	}}
 	}}
 	"""
+
 
 		# Write source files
 		cpp_path = os.path.join(build_dir, "streaming_slice.cpp")
@@ -42,7 +83,7 @@ class StreamingSlice_hls(StreamingSlice):
 
 		# Write TCL script for Vitis HLS
 		tcl_script = f"""open_project {build_dir}
-	set_top StreamingSlice_top
+	set_top {module_name}
 	add_files streaming_slice.cpp
 	add_files streaming_slice.hpp
 	open_solution "solution1"
@@ -91,38 +132,6 @@ class StreamingSlice_hls(StreamingSlice):
 		print(f"✅ Generated StreamingSlice HLS project at {build_dir}")
 
 
-	# def code_generation_ipi(self):
-	# 	ip_name = self.onnx_node.name
-	# 	ip_dir = self.get_nodeattr("code_gen_dir_ipgen")
-	# 	ip_repo = os.path.join(ip_dir, "solution1", "impl")
-	# 	ip_xci_path = os.path.join(ip_repo, "ip", "StreamingSlice_top.xci")
-
-	# 	self.set_nodeattr("ip_path", os.path.join(ip_repo, "ip", "hdl"))
-
-	# 	return [
-	# 		f"set_property ip_repo_paths {{{os.path.abspath(ip_repo)}}} [current_project]",
-	# 		"update_ip_catalog -rebuild",
-
-	# 		# ✅ Step 1: Create .xci in Vivado internal folder
-	# 		f"create_ip -name StreamingSlice_top -vendor xilinx.com -library hls -version 1.0 -module_name {ip_name}",
-	# 		f"generate_target all [get_ips {ip_name}]",
-
-	# 		# ✅ Step 2: Copy it out to the desired FINN path
-	# 		f"file mkdir {{{os.path.dirname(ip_xci_path)}}}",
-	# 		f"file copy -force [get_property IP_FILE [get_ips {ip_name}]] {{{ip_xci_path}}}",
-
-	# 		# ✅ Step 3: Register it manually back
-	# 		f"add_files -norecurse {{{ip_xci_path}}}",
-	# 		"update_ip_catalog",
-
-	# 		# ✅ Step 4: Use it in BD without re-creating it
-	# 		f"create_bd_cell -type ip -vlnv xilinx.com:hls:StreamingSlice_top:1.0 {ip_name}",
-	# 		f"make_bd_pins_external [get_bd_pins {ip_name}/ap_clk]",
-	# 		f"make_bd_pins_external [get_bd_pins {ip_name}/ap_rst_n]",
-	# 	]
-
-
-
 
 
 
@@ -132,16 +141,6 @@ class StreamingSlice_hls(StreamingSlice):
 		ip_dir = self.get_nodeattr("code_gen_dir_ipgen")
 		hdl_path = os.path.join(ip_dir, "solution1", "impl", "ip", "hdl")#, "verilog")
 
-		# vh_files = [
-		# 	"StreamingSlice_top_hls_deadlock_kernel_monitor_top.vh"
-		# ]
-
-		# v_files = [
-		# 	"StreamingSlice_top_flow_control_loop_pipe_sequential_init.v",
-		# 	#"StreamingSlice_top_hls_deadlock_idx0_monitor.v",
-		# 	#"StreamingSlice_top_hls_deadlock_idx1_monitor.v",
-		# 	"StreamingSlice_top.v"
-		# ]
   
 		if not hdl_path or not os.path.isdir(hdl_path):
 			raise ValueError(f"ip_path attribute '{hdl_path}' is not set or not a valid directory for node {ip_name}")
@@ -159,13 +158,6 @@ class StreamingSlice_hls(StreamingSlice):
 
 		tcl_cmds = []
 
-		# ✅ Add .vh with read_verilog to mark as header-only
-		# for f in vh_files:
-		# 	tcl_cmds.append(f"read_verilog {os.path.join(hdl_path, f)}")
-
-		# ✅ Add .v normally
-		# for f in v_files:
-		# 	tcl_cmds.append(f"add_files -norecurse {os.path.join(hdl_path, f)}")
 		for f in all_vh_files:
 			tcl_cmds.append(f"read_verilog {os.path.join(verilog_path, f)}") # Use read_verilog for headers
 		for f in all_v_files:
@@ -174,7 +166,7 @@ class StreamingSlice_hls(StreamingSlice):
    
 		# Create the BD cell
 		tcl_cmds += [
-			f"create_bd_cell -type module -reference StreamingSlice_top {ip_name}",
+			f"create_bd_cell -type module -reference {self.get_nodeattr('module_name')} {ip_name}",
 			f"puts \" Functions called by streaming_slice_HLS\"",
 		]
   
@@ -187,10 +179,12 @@ class StreamingSlice_hls(StreamingSlice):
 			# Add clock associations for the inferred interfaces
 			f"set_property -dict [list CONFIG.ASSOCIATED_BUSIF {{in0:out_r}}] [get_bd_pins {ip_name}/ap_clk]",
 			f"set_property -dict [list CONFIG.ASSOCIATED_RESET {{ap_rst_n}}] [get_bd_pins {ip_name}/ap_clk]",
-			f"set_property -dict [list CONFIG.FREQ_HZ %d] [get_bd_pins {ip_name}/ap_clk]" % round(1 / (float(self.get_nodeattr("clk_ns")) * 1e-9)),
+			#f"set_property -dict [list CONFIG.FREQ_HZ %d] [get_bd_pins {ip_name}/ap_clk]" % round(1 / (float(self.get_nodeattr("clk_ns")) * 1e-9)),
 			# Explicitly associate reset to clock if needed (often inferred, but good practice)
 			# f"set_property -dict [list CONFIG.ASSOCIATED_CLOCK {{ap_clk}}] [get_bd_pins {ip_name}/ap_rst_n]", # Optional
 		]
+  
+	
 		# Apply properties:
 		# 1. Set properties on the CLOCK PIN (ap_clk)
 		#    (Keep FREQ_HZ here, ASSOCIATED_BUSIF/RESET might be less effective but harmless)
@@ -222,7 +216,8 @@ class StreamingSlice_hls(StreamingSlice):
 		return tcl_cmds
 
 	def hls_sname(self):
-		return "StreamingSlice_top"
+		return self.get_nodeattr("module_name")
+
  
 	def get_verilog_top_module_intf_names(self):
 		return {
