@@ -2,7 +2,7 @@ from shutil import copy, make_archive
 from qonnx.core.modelwrapper import ModelWrapper
 import shutil, os
 
-version = 34
+version = 43
 deploy_dir = f"/home/eveneiha/finn/workspace/fpga/deploy_v{version}"
 
 # Check if folder exists

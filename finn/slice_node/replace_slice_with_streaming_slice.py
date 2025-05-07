@@ -43,6 +43,8 @@ class ReplaceSliceWithStreamingSlice(Transformation):
             ss_node.set_nodeattr("backend", "fpgadataflow")
             ss_node.set_nodeattr("fpgapart", "xc7z020clg400-1")  # or your actual target
             ss_node.set_nodeattr("clk_ns", "10.0")  # adjust clock period as needed
+            ss_node.set_nodeattr("module_name", f"StreamingSlice_top_{ss_node.onnx_node.name}")
+
 
             # Infer input/output shapes
             input_shape = model.get_tensor_shape(data_input)
@@ -151,13 +153,29 @@ class ReplaceSliceWithStreamingSlice(Transformation):
 
                     # Very important: keep channels (axis 1) = 8
                     fixed_shape = in_shape.copy()
-                    if len(fixed_shape) >= 2:
-                        fixed_shape[1] = 8  # Channels stay 8
+                    if len(fixed_shape) >= 2 & step == 4:
+                        fixed_shape[1] = 8# Channels stay 8
+                        print(f"🛠️ Fixing {consumer.op_type} {consumer.name} output shape: {fixed_shape}")
                     model.set_tensor_shape(consumer.input[0], fixed_shape)
                     model.set_tensor_shape(consumer.output[0], fixed_shape)
 
             # Remove old Slice and insert StreamingSlice
             graph.node.remove(slice_node)
             graph.node.append(ss_node.onnx_node)
+            
+            
+            
+            try:
+                ss_node_wrapper = ss_node# Use FINN's wrapper to easily get attrs
+                print(f"  FINN Attr start_idx: {ss_node_wrapper.get_nodeattr('start_idx')}")
+                print(f"  FINN Attr slice_length: {ss_node_wrapper.get_nodeattr('slice_length')}")
+                print(f"  FINN Attr axis: {ss_node_wrapper.get_nodeattr('axis')}")
+                print(f"  FINN Attr step: {ss_node_wrapper.get_nodeattr('step')}")
+                print(f"  FINN Attr input_shape: {ss_node_wrapper.get_nodeattr('input_shape')}")
+                print(f"  FINN Attr output_shape: {ss_node_wrapper.get_nodeattr('output_shape')}")
+            except Exception as e:
+                print(f"Error getting attributes via StreamingSlice wrapper: {e}")
+            print("----------------------------------------------------")
+            break
 
         return (model, False)

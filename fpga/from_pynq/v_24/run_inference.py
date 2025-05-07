@@ -30,7 +30,7 @@ def execute_and_debug(ol, input_npy):
 
 ##--- Quantize Inputs ---##
 
-def quantize_input(x_float, scale=0.0078125, zero_point=8):
+def quantize_input(x_float, scale=0.0078125, zero_point=0):
     x_int = np.clip(np.round(x_float / scale) + zero_point, -128, 127)
     return x_int.astype(np.int8)
 

@@ -69,19 +69,19 @@ model = model.transform(ConvertSubToAdd())
 model = model.transform(ConvertDivToMul())                        
 model = model.transform(RemoveUnusedTensors())                                                                                 
 model = model.transform(MovePadAttributeToTensor())  
-# import sys 
-# sys.exit()
+
 
 print("🧪 Thresholds Before streamline:")
 for init in model.graph.initializer:
     if "MultiThreshold" in init.name:
         th = model.get_initializer(init.name)
         print(f"- {init.name}: min={th.min()}, max={th.max()}")
-
+model.save('./onnx/tcn_before_streamline.onnx')
 model = model.transform(absorb.AbsorbAddIntoMultiThreshold())
 model = model.transform(absorb.AbsorbMulIntoMultiThreshold())
 
 model.save('./onnx/tcn_after_abs.onnx')
+
 
 model = model.transform(Streamline()) # Apply a series of transformations to the model to make it more efficient.
 
@@ -113,7 +113,6 @@ model = model.transform(absorb.AbsorbSignBiasIntoMultiThreshold())
 model.save('./onnx/tcn_beforeconsecutivetransposes.onnx')
 model = model.transform(absorb.AbsorbConsecutiveTransposes())
 
-model.save('./onnx/tcn_after_abs.onnx')
 model = model.transform(RoundAndClipThresholds())
 model = model.transform(MinimizeWeightBitWidth())
 model = model.transform(MinimizeAccumulatorWidth())
@@ -134,9 +133,10 @@ for node in model.graph.node:
 model = model.transform(to_hw.InferLookupLayer())
 model = model.transform(to_hw.InferVectorVectorActivation())
 model = model.transform(to_hw.InferThresholdingLayer())
+model.save('./onnx/tcn_beforeinferconvipgen.onnx')
 model = model.transform(to_hw.InferConvInpGen())
 model = model.transform(to_hw.InferQuantizedMatrixVectorActivation())
-
+model.save('./onnx/tcn_beforeinferconvipgen2.onnx')
 model = model.transform(RoundAndClipThresholds())
 model = model.transform(MinimizeWeightBitWidth())
 model = model.transform(MinimizeAccumulatorWidth())
@@ -161,7 +161,6 @@ model = model.transform(GiveReadableTensorNames())
 
 model = model.transform(PrepareIP(fpga_part, 10))           
 model.save('./onnx/afteR_prepare_IP.onnx')
-
 
 model = model.transform(InferDataLayouts())
 model = model.transform(RemoveUnusedTensors())
@@ -188,14 +187,13 @@ model = ModelWrapper(dataflow_model_filename)
 
 
 
-
-
+model.save('./onnx/tcn_before_specialize.onnx')
 # --- Hardware Build ---
 
 model = model.transform(SpecializeLayers(fpga_part))
 model.save('./onnx/tcn_after_specialize.onnx')
 import sys 
-# sys.exit("Terminating early for debugging purposes") 
+sys.exit("Terminating early for debugging purposes") 
 
 
 model = model.transform(InsertAndSetFIFODepths(fpgapart=fpga_part))
