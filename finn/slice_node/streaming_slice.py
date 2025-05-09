@@ -4,7 +4,7 @@ from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
 from finn.util.basic import make_build_dir
 import os
 from qonnx.core.datatype import DataType
-
+import numpy as np
 
 class StreamingSlice(HWCustomOp):
     def get_nodeattr_types(self):
@@ -27,7 +27,8 @@ class StreamingSlice(HWCustomOp):
             "clk_ns": ("s", False, "10"), 
             "ip_path": ("s", False, ""),
             "module_name": ("s", True, ""),
-          
+            "num_channels": ("i", False, 8),
+            "data_layout": ("s", False, "NCHW"),
         })
         return my_attrs
 
@@ -58,23 +59,83 @@ class StreamingSlice(HWCustomOp):
         return new_node
 
     def infer_node_shape(self, model):
-        assert model.get_tensor_shape(self.onnx_node.input[0]) is not None, "Input shape unknown!"
-        inp_shape = model.get_tensor_shape(self.onnx_node.input[0])
+        print(f"🔁🔁🔁INFO: Inferring shape for StreamingSlice {self.onnx_node.name}")
+        inp_node = self.onnx_node.input[0]
+        inp_shape = model.get_tensor_shape(inp_node)
+        assert inp_shape is not None, f"Input shape unknown for {self.onnx_node.name}!"
+        if not inp_shape: return
+
         axis = self.get_nodeattr("axis")
         slice_len = self.get_nodeattr("slice_length")
-        out_shape = inp_shape.copy()
+        # --- Get data_layout, use default if not set ---
+        data_layout = self.get_nodeattr("data_layout") # Will now get "NCHW" by default if not set
+
+        print(f"DEBUG: {self.onnx_node.name} - inp_shape={inp_shape}, axis={axis}, data_layout='{data_layout}'") # Print layout
+
+        out_shape = list(inp_shape)
+        if axis < 0: axis += len(inp_shape)
+        assert axis < len(inp_shape), f"Axis {axis} out of bounds for input shape {inp_shape}"
         out_shape[axis] = slice_len
         model.set_tensor_shape(self.onnx_node.output[0], out_shape)
-        
-        # Save shapes into node attributes
-        self.set_nodeattr("input_shape", inp_shape)
-        self.set_nodeattr("output_shape", out_shape)
+
+        num_inner_elements = 1 # Default
+        if len(inp_shape) == 4:
+            if data_layout == "NHWC":
+                print(f"DEBUG: {self.onnx_node.name} - Applying NHWC logic for num_channels")
+                # Layout is [Batch, Height, Width, Channels]
+                if axis == 0: # Slicing Batch (N)
+                    num_inner_elements = inp_shape[1] * inp_shape[2] * inp_shape[3] # H*W*C
+                elif axis == 1: # Slicing Height (H)
+                    num_inner_elements = inp_shape[2] * inp_shape[3] # Interleaved elements are W*C
+                elif axis == 2: # Slicing Width (W)
+                    num_inner_elements = inp_shape[3] # Interleaved elements are C
+                elif axis == 3: # Slicing Channels (C)
+                    num_inner_elements = inp_shape[1] * inp_shape[2] # H*W (elements per channel slice)
+                else:
+                    warnings.warn(f"NHWC: Invalid axis {axis} for 4D shape.")
+            elif data_layout == "NCHW": # Default NCHW if not NHWC and 4D
+                print(f"DEBUG: {self.onnx_node.name} - Applying NCHW logic for num_channels")
+                # Layout is [Batch, Channels, Height, Width]
+                if axis == 0: # Slicing Batch (N)
+                    num_inner_elements = inp_shape[1] * inp_shape[2] * inp_shape[3] # C*H*W
+                elif axis == 1: # Slicing Channels (C)
+                    num_inner_elements = inp_shape[2] * inp_shape[3] # H * W
+                elif axis == 2: # Slicing Height (H)
+                    num_inner_elements = inp_shape[1] * inp_shape[3] # C * W
+                elif axis == 3: # Slicing Width (W)
+                    num_inner_elements = inp_shape[1] # C
+                else:
+                    warnings.warn(f"NCHW: Invalid axis {axis} for 4D shape.")
+            else:
+                warnings.warn(f"Unrecognized data_layout '{data_layout}' for {self.onnx_node.name}. Defaulting num_channels logic.")
+                # Fallback to a reasonable default if layout is unknown but 4D
+                # This part is tricky without knowing what axis means for an unknown 4D layout.
+                # For now, let's assume if axis is 2, C is at 1 and W is at 3 (like NCHW)
+                if axis == 2: num_inner_elements = inp_shape[1] * inp_shape[3]
+                elif axis == 1: num_inner_elements = inp_shape[2] * inp_shape[3]
+
+
+        else: # Not 4D input
+            warnings.warn(f"Input shape for {self.onnx_node.name} is not 4D ({len(inp_shape)}D). num_channels logic might be incorrect.")
+            if axis < len(inp_shape) - 1:
+                num_inner_elements = int(np.prod(inp_shape[axis+1:]))
+            else:
+                num_inner_elements = 1
+
+        if num_inner_elements == 0 : num_inner_elements = 1
+        self.set_nodeattr("num_channels", int(num_inner_elements))
+        print(f"INFO: Inferred num_channels={int(num_inner_elements)} for StreamingSlice {self.onnx_node.name} (axis={axis}, input_shape={inp_shape}, data_layout='{data_layout}')")
+
+        self.set_nodeattr("input_shape", inp_shape) # Store original input shape
+        self.set_nodeattr("output_shape", out_shape) 
 
     def infer_node_datatype(self, model):
         assert model.get_tensor_datatype(self.onnx_node.input[0]) is not None, "Input dtype unknown!"
         inp_dtype = model.get_tensor_datatype(self.onnx_node.input[0])
-        model.set_tensor_datatype(self.onnx_node.output[0], inp_dtype)
-        self.set_nodeattr("dataType", inp_dtype.name)
+        forced_dtype = "INT24" # 24-bit datatype
+        finn_dtype = DataType[forced_dtype]
+        model.set_tensor_datatype(self.onnx_node.output[0], finn_dtype)
+        self.set_nodeattr("dataType", finn_dtype.name)
 
     def execute_node(self, context, graph):
         inp = context[self.onnx_node.input[0]]
