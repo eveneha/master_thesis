@@ -9,6 +9,8 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx # Optional, for getting constants
 from qonnx.transformation.general import GiveUniqueNodeNames # Good practice
 import numpy as np
+from qonnx.transformation.infer_shapes import InferShapes
+
 
 
 
@@ -103,13 +105,15 @@ def convert_node_io_to_nhwc(model, node_name):
 
         except ValueError:
             print(f"Warning: Could not map original axis {original_axis} ({original_dim_name}) to new NHWC layout.")
-
+        #model = model.transform(InferShapes())  # Recompute shapes after attribute change
 
 
     # Only for fpgadataflow nodes
     if target_node.domain == "finn.custom_op.fpgadataflow" and new_normal_shape is not None:
         inst = getCustomOp(target_node)
-
+        inst = getCustomOp(target_node)
+        inst.set_nodeattr("data_layout", "NHWC") # <--- ADD THIS
+        print(f"✅ Set data_layout to NHWC for {target_node.name}")
         # Update normal_shape and output_shape
         inst.set_nodeattr("normal_shape", new_normal_shape)
         inst.set_nodeattr("output_shape", new_normal_shape)
