@@ -1,6 +1,6 @@
 #include <hls_stream.h>
 #include <ap_int.h>
-#include <stdio.h> // Include for temporary debugging
+#include <stdio.h> 
 
 // Add NumChannels as a template parameter
 template<
@@ -31,43 +31,21 @@ void StreamingSlice(hls::stream<T> &in0, hls::stream<T> &out) {
         // Read all channels for this H-slice from the stream
         ReadChannelLoop:
         for (unsigned int c_idx = 0; c_idx < NumChannels; c_idx++) {
-        // Ensure the pipeline pragma applies to the innermost loop for throughput
         #pragma HLS PIPELINE II=1
 
             // Prevent reading beyond the total expected stream elements if NumIn wasn't total
-             if (total_elements_read >= TOTAL_INPUT_ELEMENTS) break; // Or handle error
+             if (total_elements_read >= TOTAL_INPUT_ELEMENTS) break; 
 
-            // ALWAYS read from input to consume the data
             temp = in0.read();
             total_elements_read++;
 
-             // --- DEBUG PRINT ---
-             if (h_input_idx < 2 || h_input_idx == 4) { // Print for H=0, H=1, H=4
-                 long long temp_ll = temp; // Cast for printf
-                 printf("HLS Corrected: h_in=%u, c_in=%u, read_temp=%lld (0x%llX), keep_h=%d\n",
-                        h_input_idx, c_idx, temp_ll, temp_ll, keep_this_h_slice);
-             }
-             // --- END DEBUG ---
-
             if (keep_this_h_slice) {
-                // --- DEBUG PRINT ---
-                 if (h_input_idx < 2 || h_input_idx == 4) {
-                     long long temp_ll = temp;
-                     printf("HLS Corrected: h_in=%u, c_in=%u, writing_temp=%lld (0x%llX), h_out_cnt=%u\n",
-                            h_input_idx, c_idx, temp_ll, temp_ll, h_output_count);
-                 }
-                // --- END DEBUG ---
-                out.write(temp); // Write if H-slice is kept
+                out.write(temp); 
             }
-        } // End channel loop
+        } 
 
         if (keep_this_h_slice) {
-            h_output_count++; // Increment count AFTER processing all channels for the kept H-slice
+            h_output_count++; 
         }
-        
-        // Optional: Break outer loop early if all outputs generated AND input fully consumed?
-        // Needs care to ensure all input required is consumed even if not outputted.
-        // The current structure ensures all NumH_In * NumChannels are read.
-
     } // End H loop
 }

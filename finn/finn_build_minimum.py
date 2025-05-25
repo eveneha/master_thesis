@@ -7,7 +7,6 @@ import finn.transformation.streamline.absorb as absorb
 import finn.transformation.fpgadataflow.convert_to_hw_layers as to_hw
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
 from finn.transformation.streamline import Streamline
-from finn.transformation.streamline.round_thresholds import RoundAndClipThresholds
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.transformation.fpgadataflow.make_zynq_proj import ZynqBuild
 from finn.transformation.fpgadataflow.make_pynq_driver import MakePYNQDriver
@@ -16,175 +15,132 @@ from finn.transformation.fpgadataflow.minimize_weight_bit_width import MinimizeW
 from finn.transformation.fpgadataflow.set_fifo_depths import InsertAndSetFIFODepths
 from finn.transformation.fpgadataflow.create_dataflow_partition import CreateDataflowPartition
 from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
-from finn.transformation.move_reshape import RemoveCNVtoFCFlatten
 
 # QONNX
 from qonnx.util.cleanup import cleanup
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.general import *
-from qonnx.transformation.infer_shapes import InferShapes
-from qonnx.transformation.fold_constants import FoldConstants
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.lower_convs_to_matmul import LowerConvsToMatMul
-from qonnx.transformation.general import RemoveUnusedTensors 
 from qonnx.transformation.infer_data_layouts import InferDataLayouts
-from qonnx.transformation.remove import RemoveIdentityOps
 
 #CUSTOM
 from util import convert_node_io_to_nhwc, move_node_to_before
 from slice_node.replace_slice_with_streaming_slice import ReplaceSliceWithStreamingSlice
 
 
+import hashlib
+
+# Add a depth counter
+_transform_depth = 0
+
+def hash_model(model):
+    graph_str = str(model.graph)
+    init_hashes = [
+        hashlib.md5(model.get_initializer(init.name).tobytes()).hexdigest()
+        for init in model.graph.initializer
+    ]
+    full_repr = graph_str + "".join(init_hashes)
+    return hashlib.md5(full_repr.encode()).hexdigest()
+
+# Save original method
+ModelWrapper._orig_transform = ModelWrapper.transform
+
+# Monkey-patch
+def patched_transform(self, transformation, **kwargs):
+    global _transform_depth
+    _transform_depth += 1
+    try:
+        if _transform_depth == 1:  # Only track top-level transforms
+            before = hash_model(self)
+            result = self._orig_transform(transformation, **kwargs)
+            after = hash_model(result)
+            change = "✅ CHANGED" if before != after else "❌ NO CHANGE"
+            print(f"[{change}] {transformation.__class__.__name__}")
+            return result
+        else:
+            return self._orig_transform(transformation, **kwargs)
+    finally:
+        _transform_depth -= 1
+
+
+ModelWrapper.transform = patched_transform
+
 pynq_board = "Pynq-Z1"
 fpga_part = pynq_part_map[pynq_board]
 target_clk_ns = 10
 filename= './onnx/tcn_v41_inf.onnx'
-# filename = "/home/eveneiha/finn/workspace/ml/model/pruned_model.onnx"
 
 cleanup(filename, out_file=filename)
-
 model = ModelWrapper(filename)
 model.save('./onnx/00_after_cleanup.onnx')
-model = model.transform(ConvertQONNXtoFINN())
-model.save('./onnx/01_after_convertQONNXtoFINN.onnx')
 
-# Transforming onnx to be cleaner
-model = model.transform(InferShapes())                              
-model = model.transform(FoldConstants())                             
+
+model = model.transform(ConvertQONNXtoFINN())
+model.save('./onnx/01_after_convertQONNXtoFINN.onnx')   
+            
+            
 model = model.transform(GiveUniqueNodeNames())                                                                    
 model = model.transform(GiveReadableTensorNames())  
 model.save('./onnx/02tcn_before_qonnx_transforms.onnx')                                                                                                                        
-model = model.transform(RemoveStaticGraphInputs())                 
-model = model.transform(GiveUniqueParameterTensors())                                                                    
-model = model.transform(SortGraph())                                                                                                                                  
-model = model.transform(ConvertSubToAdd())                 
-model = model.transform(ConvertDivToMul())                        
-model = model.transform(RemoveUnusedTensors())                                                                                 
-model = model.transform(MovePadAttributeToTensor())  
 
-model.save('./onnx/03_tcn_after_qonnx_transforms.onnx') # <--- FIRST VERSION THAT WORKS ON ONNXRUNTIME 
 
-print("🧪 Thresholds Before streamline:")
-for init in model.graph.initializer:
-    if "MultiThreshold" in init.name:
-        th = model.get_initializer(init.name)
-        print(f"- {init.name}: min={th.min()}, max={th.max()}")
-
-## must move final add above  MultiThreshold_10
-
-model.save('./onnx/03_tcn_before_absorb.onnx')
-model = model.transform(absorb.AbsorbAddIntoMultiThreshold())
 model = model.transform(absorb.AbsorbMulIntoMultiThreshold())
-model.save('./onnx/_04_tcn_after_absorb.onnx')
 model = model.transform(Streamline()) # Apply a series of transformations to the model to make it more efficient.
-model.save('./onnx/05_tcn_after_streamline.onnx')
+model.save('./onnx/03_tcn_after_streamline.onnx')
 model = model.transform(ReplaceSliceWithStreamingSlice()) ## <-- This is the custom op
-model.save('./onnx/05_tcn_after_streaming_slice.onnx')
+model.save('./onnx/04_tcn_after_streaming_slice.onnx')
 model = model.transform(absorb.AbsorbMulIntoMultiThreshold())
-model.save('./onnx/06_after_streaming_slice.onnx')
-
-
-
-print("🧪 Thresholds after streamline:")
-for init in model.graph.initializer:
-    if "MultiThreshold" in init.name:
-        th = model.get_initializer(init.name)
-        print(f"- {init.name}: min={th.min()}, max={th.max()}")
-
-
+model.save('./onnx/05_after_streaming_slice.onnx')
 
      
-model.save('./onnx/07_tcn_before_globalavg.onnx')  
 model = model.transform(InferDataLayouts())
-model = model.transform(RemoveIdentityOps())
-model = model.transform(InferShapes())
 model = model.transform(InferDataTypes())
 model = model.transform(Streamline())
-model.save('./onnx/08_tcn_after_qonnx_transforms.onnx')
+model.save('./onnx/06_tcn_after_qonnx_transforms.onnx')
+
 
 model = model.transform(LowerConvsToMatMul())
 model = model.transform(GiveUniqueNodeNames())
 model = model.transform(GiveReadableTensorNames())
-model.save('./onnx/09_tcn_before_abs.onnx')
+model.save('./onnx/07_tcn_before_abs.onnx')
+
 
 model = move_node_to_before(model, "Transpose_7", "MultiThreshold_5") ## <-- impossible to transpose into a streamingslice so move it after and do manually transpose on SS 
 model = convert_node_io_to_nhwc(model, "StreamingSlice_0")
+model.save('./onnx/8_tcn_after_transpose_rewire.onnx')
 
-
-model.save('./onnx/10a_tcn_after_transpose_rewire.onnx')
-model.save('./onnx/10b_tcn_after_transpose_rewire.onnx')
 
 model = model.transform(absorb.AbsorbTransposeIntoMultiThreshold())
 model = model.transform(Streamline())
 model = model.transform(InferDataLayouts())
-model = model.transform(absorb.AbsorbAddIntoMultiThreshold())
-model = model.transform(absorb.AbsorbMulIntoMultiThreshold())
-model = model.transform(absorb.AbsorbSignBiasIntoMultiThreshold())
 model = model.transform(absorb.AbsorbConsecutiveTransposes())
-model.save('./onnx/10__tcn_after_transpose_rewire.onnx')
+model.save('./onnx/9_tcn_onnx_cleanup.onnx')
 
 
-model.save('./onnx/11_tcn_after_abs.onnx')
-model = model.transform(RoundAndClipThresholds())
-model = model.transform(MinimizeWeightBitWidth())
-model = model.transform(MinimizeAccumulatorWidth())
-model = model.transform(InferDataTypes())
-model = model.transform(RemoveUnusedTensors())
-model = model.transform(RemoveCNVtoFCFlatten())
-
-
-# Convertion to HLS 
-model.save('./onnx/12_tcn_befor_hw.onnx')
-model = model.transform(to_hw.InferLookupLayer())
-model = model.transform(to_hw.InferVectorVectorActivation())
 model = model.transform(to_hw.InferThresholdingLayer())
 model = model.transform(GiveUniqueNodeNames())
 model = model.transform(GiveReadableTensorNames())
-model = model.transform(absorb.AbsorbConsecutiveTransposes())
+model.save('./onnx/10_tcn_beforeinferconvipgen.onnx')
 
-model.save('./onnx/13_tcn_after_hls.onnx')
-# removing reduntand input parameters on streamingslice
-model = model.transform(InferShapes())
-model = model.transform(RemoveUnusedTensors())
-model.save('./onnx/14_tcn_beforeinferconvipgen.onnx')
+
 model = model.transform(to_hw.InferConvInpGen())
 model = model.transform(to_hw.InferQuantizedMatrixVectorActivation())
-model = model.transform(RoundAndClipThresholds())
-model = model.transform(MinimizeWeightBitWidth())
 model = model.transform(MinimizeAccumulatorWidth())
-model = model.transform(InferDataLayouts())
-model = model.transform(absorb.AbsorbConsecutiveTransposes())
-model = model.transform(to_hw.InferChannelwiseLinearLayer())
-model = model.transform(RemoveUnusedTensors())
-model = model.transform(InferShapes())
-model = model.transform(InferDataTypes())
-
-# BEFORE partitioning explicitly:
-model = model.transform(InferShapes())
-model = model.transform(InferDataTypes())
-model = model.transform(InferDataLayouts())
-model = model.transform(InferShapes())
-# Explicit FIFO insertion to break cyclic dependency:
-model = model.transform(RemoveUnusedTensors())
-
-# Finally
 model = model.transform(GiveUniqueNodeNames())                                                                            
 model = model.transform(GiveReadableTensorNames())  
-model.save('./onnx/18_tcn_before_prepareip.onnx')
+model.save('./onnx/11_tcn_reduce_acc_width.onnx')
+
+
 model = model.transform(PrepareIP(fpga_part, 10))           
-model.save('./onnx/18_afteR_prepare_IP.onnx')
-
-model = model.transform(InferDataLayouts())
-model = model.transform(RemoveUnusedTensors())
-model.save('./onnx/19_tcn_beforePArt.onnx')
-
+model.save('./onnx/13_tcn_before_part.onnx')
 
 for idx, node in enumerate(model.graph.node):
     print(f"{idx}: {node.name} ({node.op_type}) - domain: {node.domain}")
     
 parent_model = model.transform(CreateDataflowPartition())
-parent_model.save('./onnx/20_tcn_after_oart.onnx')
+parent_model.save('./onnx/14_tcn_after_part.onnx')
 
 
 # # Mapping to Pynq Z1
@@ -196,11 +152,11 @@ dataflow_model_filename = sdp_node.get_nodeattr("model")
 model = ModelWrapper(dataflow_model_filename)
 
 # --- Hardware Build ---
-model.save('./onnx/21_tcn_before_specialize.onnx')
+model.save('./onnx/15_tcn_before_specialize.onnx')
 model = model.transform(SpecializeLayers(fpga_part))
-model.save('./onnx/21_tcn_after_specialize.onnx')
+model.save('./onnx/16_tcn_after_specialize.onnx')
 model = model.transform(InsertAndSetFIFODepths(fpgapart=fpga_part))
-model.save('./onnx/22_tcn_after_fifodepths.onnx')
+model.save('./onnx/17_tcn_after_fifodepths.onnx')
 
 # # Synthesising and creating driver for FPGA
 model = model.transform(ZynqBuild(platform = pynq_board, period_ns = target_clk_ns))
@@ -223,9 +179,9 @@ directory = model.get_metadata_prop("/home/eveneiha/finn/finn_host_build_dir/viv
 files = os.listdir(directory)
 print(files)
 
-print("\n" + "="*40)
-print("        🎉 FINN BUILD COMPLETE 🎉")
-print("="*40)
+print("\n" + "="*46)
+print("           🎉 FINN BUILD COMPLETE 🎉")
+print("="*46)
 print("Your accelerator has been successfully built")
 print("and is ready for deployment to your PYNQ board.")
-print("="*40 + "\n")
+print("="*46 + "\n")

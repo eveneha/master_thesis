@@ -22,7 +22,7 @@ import finn.transformation.fpgadataflow.convert_to_hw_layers as to_hw
 from qonnx.transformation.remove import RemoveIdentityOps
 from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 
-
+import sys 
 # QONNX
 from qonnx.util.cleanup import cleanup
 from qonnx.custom_op.registry import getCustomOp
@@ -192,8 +192,7 @@ model.save('./onnx/tcn_before_specialize.onnx')
 
 model = model.transform(SpecializeLayers(fpga_part))
 model.save('./onnx/tcn_after_specialize.onnx')
-import sys 
-sys.exit("Terminating early for debugging purposes") 
+
 
 
 model = model.transform(InsertAndSetFIFODepths(fpgapart=fpga_part))
