@@ -43,16 +43,16 @@ logging.getLogger("qonnx.util.basic").setLevel(logging.WARNING)
 # ==============================================================================
 
 # --- ONNX model BEFORE specialization ---
-ONNX_MODEL_PATH = "/home/eveneiha/finn/workspace/finn/onnx/21_tcn_before_specialize.onnx" # <<< --- Model used for golden data generation
-INPUT_DATA_PATH = "/home/eveneiha/finn/workspace/ml/data/preprocessed/test.pt" # Contains full 1000 len float signals
+ONNX_MODEL_PATH = "/home/eveneiha/finn/workspace/finn/onnx/15_tcn_before_specialize.onnx" # <<< --- Model used for golden data generation
+INPUT_DATA_PATH = "/home/eveneiha/finn/workspace/ml/data/preprocessed/inter_patient/test.pt" # Contains full 1000 len float signals
 
 # --- Quantization / Dequantization ---
 INPUT_QUANTIZATION_ENABLED = True # Must be true to generate correct integer inputs
-INPUT_SCALE_FACTOR = 0.007948528975248337 # Verified input scale factor
+INPUT_SCALE_FACTOR = 0.007868274115025997 # Verified input scale factor
 INPUT_ZERO_POINT = 0 # Assuming zero point is 0 for INT8 <<< --- VERIFY if non-zero needed
 
 NUM_SAMPLES_TO_GENERATE = 1 # How many samples to generate files for
-NUM_OUTPUT_CLASSES = 5 # From model architecture
+NUM_OUTPUT_CLASSES = 4 # From model architecture
 
 # --- Output File Locations ---
 OUTPUT_DIR_GOLDENTB = "./goldentb" # Create this directory if it doesn't exist
