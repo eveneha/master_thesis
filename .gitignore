@@ -9,3 +9,4 @@ archived/
 # Ignore large files
 ml/data/input.npy
 fpga/deploy_v*/deploy-on-pynq.zip
+/home/eveneiha/finn/workspace/ml/model/ml_archive

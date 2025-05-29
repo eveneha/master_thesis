@@ -10,38 +10,25 @@ from init_model import ol  # assumes your overlay is initialized there
 inputs = np.load("input.npy").astype(np.float32)   # (N,1000,1,1)
 labels = np.load("labels.npy").astype(np.int32) # (N,)
 
-inputs1 = np.load("finn_sample.npy")
+inputs1 = np.load("pynq_input1000.npy")
+inputs1 = np.array(inputs1)
 
-# monkey-patch: wrap the execute() function
-def execute_and_debug(ol, input_npy):
-    # Run the normal execute
-    output = ol.execute(input_npy)
-    # #  After execution, access the raw packed output
-    # raw_packed_output = ol.obuf_packed_device[0]
-    # raw_packed_output.invalidate()  # sync from device
-    # raw_packed_np = np.array(raw_packed_output)  # convert to numpy
 
-    # print("\n🛠️  RAW PACKED OUTPUT DEBUG 🛠️")
-    # print(f"Raw packed output dtype: {raw_packed_np.dtype}")
-    # print(f"Raw packed output shape: {raw_packed_np.shape}")
-    # print(f"First 100 raw packed bytes:", raw_packed_np.flatten()[:100])
-
-    return output
 
 ##--- Quantize Inputs ---##
+# 0.007948528975248337
+# scale=0.008124164596665651
+# 0.007684304844588041
+#0.007885444909334183
+#scale=0.007684304844588041
 
-def quantize_input(x_float, scale=0.0078125, zero_point=0):
+# 0.0405256450176239
+def quantize_input(x_float, scale=0.007885444909334183, zero_point=0):
     x_int = np.clip(np.round(x_float / scale) + zero_point, -128, 127)
     return x_int.astype(np.int8)
 
 inputs = [quantize_input(x) for x in inputs]
 inputs = np.array(inputs)
-
-print("Input data range (min/max):", np.min(inputs), np.max(inputs))
-
-
-# ——— optional: if you know the bitstream is already loaded, skip flashing ———
-# ol.download(download=False)
 
 # ——— inference loop ———
 correct = 0
@@ -52,24 +39,12 @@ all_targets= []
 misclassified = defaultdict(lambda: defaultdict(list))
 
 
-print("--- Input Data Check ---")
-print(f"Input array dtype: {inputs.dtype}")
-print(f"Input array shape: {inputs.shape}")
-print(f"Input array min value: {np.min(inputs)}")
-print(f"Input array max value: {np.max(inputs)}")
+
 sample_input_for_fpga = inputs[0].reshape(1, 1000, 1, 1)
-print(f"Shape being sent to execute(): {sample_input_for_fpga.shape}")
-# Optional: print a small slice
-# print(f"Sample data slice [0, :10, 0, 0]: {sample_input_for_fpga[0, :10, 0, 0]}")
-print("------------------------")
-print(f"Input sample (first 1000 values): {inputs[0][0, :1000, 0]}")  # This will print the first 1000 values
 
 
 def int8_to_bytes(arr: np.ndarray) -> bytes:
-    """
-    Convert an int8 NumPy array to a raw byte stream, byte-aligned,
-    assuming FINN-style packing (one int8 per byte, MSB-first).
-    """
+  
     if arr.dtype != np.int8:
         raise ValueError("Expected dtype=int8")
     return arr.astype(np.uint8).tobytes()
@@ -78,24 +53,18 @@ print("▶️  Starting inference loop…")
 #print(inputs2.shape)
 for i in range(total): #total
     x = inputs[i].reshape(1,1000,1,1)
-    #x = np.zeros((1, 1000,1,1), dtype=np.int8)
+    x = x[:,168:833,:,:]
     y = int(labels[i])
-
-    # print(inputs1)
-
     t0 = time.time()
-    out = execute_and_debug(ol, x)
+    out = ol.execute(x)
     t1 = time.time()
 
-    # <<< ADD DEBUG PRINTS HERE >>>
-    print(f"\n--- Batch {i} ---")
-    #print(f"Input sample (first 1000 values): {x[0, :1000, 0, 0]}")  # This will print the first 1000 values
-     # See the input that generated this output
-    #print(f"Raw output array shape: {out.shape}")
-    #print(f"Raw output array dtype: {out.dtype}")
-    print(f"Raw output array (flattened): {out}")
-    print(f"Raw output min: {np.min(out)}, max: {np.max(out)}")
-    # <<< END DEBUG PRINTS >>>
+
+    if i % 7500 == 0:
+        print(f"\n--- Batch {i} ---")
+        print(f"Rawtput array (flattened): {out}")
+        print(f"Raw output min: {np.min(out)}, max: {np.max(out)}")
+
 
     lat_ms = (t1 - t0) * 1000
     latencies.append(lat_ms)
@@ -108,7 +77,7 @@ for i in range(total): #total
     else:
         misclassified[pred][y].append(i)
 
-    if i % 200 == 0:
+    if i %  7500 == 0:
         print(f"  [{i}/{total}] lab={y}  pred={pred}  lat={lat_ms:.2f} ms")
 
 # ——— summary ———
@@ -116,6 +85,7 @@ acc = correct / total
 lat = np.array(latencies)
 print(f"\n🎯 Accuracy: {acc*100:.2f}%")
 print(f"⏱  Latency (ms): min {lat.min():.2f}, med {np.median(lat):.2f}, 90% {np.percentile(lat,90):.2f}, max {lat.max():.2f}")
+
 
 # ——— confusion matrix ———
 num_classes = max(max(all_targets), max(all_preds)) + 1
@@ -126,8 +96,8 @@ for t, p in zip(all_targets, all_preds):
 plt.figure(figsize=(6,6))
 plt.imshow(cm, cmap="Blues")
 plt.title("Confusion Matrix")
-plt.xlabel("Predicted")
-plt.ylabel("True")
+plt.xlabel("Predicted Label")
+plt.ylabel("True Label")
 for i in range(num_classes):
     for j in range(num_classes):
         plt.text(j, i, cm[i,j],
@@ -169,7 +139,7 @@ macro_f1 = np.mean(f1_scores)
 total_support = supports.sum()
 weighted_f1 = np.sum(f1_scores * (supports / total_support))
 
-print(f"\n📊 Macro‑F1:    {macro_f1:.3f}")
+print(f"\n📊 Avg. Macro‑F1:    {macro_f1:.3f}")
 print(f"📊 Weighted‑F1: {weighted_f1:.3f}")
 
 
