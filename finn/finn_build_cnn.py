@@ -26,7 +26,7 @@ from qonnx.transformation.lower_convs_to_matmul import LowerConvsToMatMul
 from qonnx.transformation.infer_data_layouts import InferDataLayouts
 
 #CUSTOM
-from util import convert_node_io_to_nhwc, move_node_to_before
+from finn.slice_node.util import convert_node_io_to_nhwc, move_node_to_before
 from slice_node.replace_slice_with_streaming_slice import ReplaceSliceWithStreamingSlice
 
 
@@ -107,7 +107,7 @@ model = model.transform(GiveReadableTensorNames())
 model.save('./onnx/07_tcn_before_abs.onnx')
 
 
-model = move_node_to_before(model, "Transpose_7", "MultiThreshold_5") ## <-- impossible to transpose into a streamingslice so move it after and do manually transpose on SS 
+model = move_node_to_before(model, "Transpose_7", "MultiThreshold_4") ## <-- impossible to transpose into a streamingslice so move it after and do manually transpose on SS 
 model = convert_node_io_to_nhwc(model, "StreamingSlice_0")
 model.save('./onnx/8_tcn_after_transpose_rewire.onnx')
 

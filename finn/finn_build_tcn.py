@@ -47,7 +47,7 @@ fpga_part = pynq_part_map[pynq_board]
 target_clk_ns = 10
 
 
-filename= './onnx/tcn_v41.onnx'
+filename= './onnx/tcn_v41_inf.onnx'
 # filename = "/home/eveneiha/finn/workspace/ml/model/pruned_model.onnx"
 
 cleanup(filename, out_file=filename)
